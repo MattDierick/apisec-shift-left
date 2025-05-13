@@ -1,0 +1,114 @@
+image:
+    name: dtzar/helm-kubectl
+    entrypoint: [""]
+
+before_script:
+    - echo $KUBE_CONFIG | base64 -d > config
+    - mkdir ~/.kube/
+    - mv config ~/.kube/
+
+variables:
+  TF_VAR_namespace: $NAMESPACE
+  TF_VAR_f5xcapi: $F5XC_API_KEY
+  TF_VAR_fqdn: $FQDN
+  TF_VAR_appname: $APP_NAME
+  TF_VAR_wasapi: $WAS_API_KEY
+  TF_VAR_wasappid: $WAS_APP_ID
+  TF_VAR_wasprofileid: $WAS_PROFILE_ID
+  TF_STATE_NAME: "default"
+
+stages:
+    - test
+    - destroy-app
+    - deploy-app
+    - update-ingress
+    - push-doc-and-oas-xc
+    - was-scan
+
+
+test-kubectl:
+    stage: test
+    script:
+        - kubectl get ns
+    rules:
+       - if: $CI_COMMIT_BRANCH == "production" && $RUN_PIPELINE == "YES"
+
+destroy-app:
+    stage: destroy-app
+    allow_failure: true
+    script:
+        - kubectl delete namespace api
+        - kubectl delete namespace webapp-nginx
+    rules:
+       - if: $CI_COMMIT_BRANCH == "production" && $RUN_PIPELINE == "YES"
+
+
+deploy-app:
+    stage: deploy-app
+    script:
+        - kubectl create namespace api --dry-run=client -o yaml | kubectl apply -f -
+        - kubectl create namespace webapp-nginx --dry-run=client -o yaml | kubectl apply -f -
+
+        - kubectl apply -f ./k8s/app/sentence-api-all.yaml -n api
+        - kubectl apply -f ./k8s/app/sentence-nginx-webapp.yaml -n webapp-nginx
+    rules:
+       - if: $CI_COMMIT_BRANCH == "production" && $RUN_PIPELINE == "YES"
+
+
+update-ingress:
+    stage: update-ingress
+    script:
+        - kubectl apply -f ./k8s/ingress-app/ingress-vs-master.yaml
+        - kubectl apply -f ./k8s/ingress-app/ingress-vs-route-api.yaml -n api
+        - kubectl apply -f ./k8s/ingress-app/ingress-vs-route-frontend.yaml -n webapp-nginx
+    rules:
+       - if: $CI_COMMIT_BRANCH == "production" && $RUN_PIPELINE == "YES"
+
+deploy-redoc:
+    stage: push-doc-and-oas-xc
+    script:
+        - kubectl apply -f ./k8s/redoc/redoc.yaml -n redoc
+        - kubectl apply -f ./k8s/ingress-redoc/ingress-vs-master-redoc.yaml
+        - kubectl apply -f ./k8s/ingress-redoc/ingress-vs-route-redoc.yaml -n redoc
+        - POD_NAME_REDOC=$(kubectl get pods --no-headers -o custom-columns=":metadata.name" -n redoc)
+        - sleep 10
+        - echo $POD_NAME_REDOC
+        - kubectl cp -n redoc ./openapi/sentence.yaml $POD_NAME_REDOC:/usr/share/nginx/html/
+
+    rules:
+       - if: $CI_COMMIT_BRANCH == "production" && $RUN_PIPELINE == "YES"
+
+
+upload-oas-f5xc:
+    stage: push-doc-and-oas-xc
+    allow_failure: true
+    image : 
+        name: hashicorp/terraform
+        entrypoint: [""]
+
+    script:
+        - cd terraform/openapi-push/
+        - terraform init -backend-config="address=http://gitlab.demo.lab/api/v4/projects/1/terraform/state/$TF_STATE_NAME" -backend-config="lock_address=http://gitlab.demo.lab/api/v4/projects/1/terraform/state/$TF_STATE_NAME/lock" -backend-config="unlock_address=http://gitlab.demo.lab/api/v4/projects/1/terraform/state/$TF_STATE_NAME/lock" -backend-config="username=udf" -backend-config="password=$GITLAB_ACCESS_TOKEN" -backend-config="lock_method=POST" -backend-config="unlock_method=DELETE" -backend-config="retry_wait_min=5"
+        - terraform plan
+        - terraform apply -auto-approve
+   
+    rules:
+       - if: $CI_COMMIT_BRANCH == "production" && $RUN_PIPELINE == "YES"
+
+was-scan:
+    stage: was-scan
+    allow_failure: true
+    image : 
+        name: hashicorp/terraform
+        entrypoint: [""]
+
+    script:
+        - cd terraform/was-scan/
+        - terraform init
+        - terraform plan
+        - terraform apply -auto-approve
+
+    when: manual
+  
+    rules:
+       - if: $CI_COMMIT_BRANCH == "production" && $RUN_PIPELINE == "YES"
