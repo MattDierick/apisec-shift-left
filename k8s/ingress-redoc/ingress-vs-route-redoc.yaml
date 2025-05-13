@@ -1,0 +1,15 @@
+apiVersion: k8s.nginx.org/v1
+kind: VirtualServerRoute
+metadata:
+  name: redoc-ui
+  namespace: redoc
+spec:
+  host: doc.sentence.com
+  upstreams:
+  - name: redoc-ui
+    service: redoc-ui
+    port: 80
+  subroutes:
+  - path: /
+    action:
+      pass: redoc-ui

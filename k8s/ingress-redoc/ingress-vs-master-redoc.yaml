@@ -1,0 +1,15 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: main-vs-redoc
+---
+apiVersion: k8s.nginx.org/v1
+kind: VirtualServer
+metadata:
+  name: vs-redoc
+  namespace: main-vs-redoc
+spec:
+  host: doc.sentence.com
+  routes:
+  - path: /
+    route: redoc/redoc-ui
